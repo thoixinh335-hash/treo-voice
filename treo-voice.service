@@ -1,0 +1,27 @@
+[Unit]
+Description=Discord Voice 24/7 Self-Bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=discord-bot
+Group=discord-bot
+WorkingDirectory=/opt/treo-voice
+EnvironmentFile=/opt/treo-voice/.env
+ExecStart=/opt/treo-voice/venv/bin/python /opt/treo-voice/selfbot.py
+Restart=always
+RestartSec=15
+StandardOutput=journal
+StandardError=journal
+
+# Bảo mật cơ bản
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/opt/treo-voice
+ReadOnlyPaths=/
+
+[Install]
+WantedBy=multi-user.target
