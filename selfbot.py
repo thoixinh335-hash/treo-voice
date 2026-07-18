@@ -95,6 +95,7 @@ class Account:
 
         # Login bằng email:password để lấy token mới
         if not await self._login():
+            self._keep_alive = False
             return
 
         while self._keep_alive:
@@ -223,7 +224,13 @@ class Account:
                 self.in_voice = False
 
         except websockets.WebSocketException as e:
-            log.warning(f"[{self.name}] 📡 WebSocket lỗi: {e}")
+            # 4004 = Authentication failed (token hết hạn)
+            if "4004" in str(e):
+                log.warning(f"[{self.name}] 🔑 Token hết hạn, đang login lại...")
+                if await self._login():
+                    self._keep_alive = True
+            else:
+                log.warning(f"[{self.name}] 📡 WebSocket lỗi: {e}")
         except OSError as e:
             log.warning(f"[{self.name}] 📡 Socket lỗi: {e}")
 
@@ -293,7 +300,13 @@ class Account:
                     break
                 continue
             except websockets.WebSocketException as e:
-                log.warning(f"[{self.name}] 📡 WebSocket mất kết nối: {e}")
+                # 4004 = Authentication failed (token hết hạn)
+                if "4004" in str(e):
+                    log.warning(f"[{self.name}] 🔑 Token hết hạn, đang login lại...")
+                    if await self._login():
+                        self._keep_alive = True
+                else:
+                    log.warning(f"[{self.name}] 📡 WebSocket mất kết nối: {e}")
                 break
 
             data = json.loads(msg)
@@ -338,8 +351,11 @@ class Account:
                 break
 
             elif op == 9:  # Invalid Session
-                log.error(f"[{self.name}] ❌ Invalid session! Token hết hạn hoặc sai.")
-                self._keep_alive = False
+                log.warning(f"[{self.name}] 🔄 Token hết hạn, đang login lại...")
+                # Login lại lấy token mới
+                if await self._login():
+                    # Gắn cờ để _connect_gateway biết cần dùng token mới
+                    self._keep_alive = True
                 break
 
     async def _find_and_join(self):
