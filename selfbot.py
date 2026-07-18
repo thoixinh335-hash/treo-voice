@@ -27,7 +27,21 @@ import websockets
 # ============================================================
 # CONFIG
 # ============================================================
-TOKENS = [t.strip() for t in os.getenv("DISCORD_TOKENS", "").split(",") if t.strip()]
+ACCOUNTS_RAW = [a.strip() for a in os.getenv("DISCORD_ACCOUNTS", "").split(",") if a.strip()]
+# Parse email:password
+ACCOUNTS = []
+for a in ACCOUNTS_RAW:
+    parts = a.split(":")
+    if len(parts) == 2:
+        ACCOUNTS.append((parts[0].strip(), parts[1].strip()))
+    else:
+        print(f"[WARNING] Sai format account (phải là email:password): {a}")
+
+VOICE_IDS = [int(c.strip()) for c in os.getenv("VOICE_CHANNEL_IDS", "").split(",") if c.strip()]
+SELF_MUTE = os.getenv("SELF_MUTE", "true").lower() == "true"
+SELF_DEAF = os.getenv("SELF_DEAF", "false").lower() == "true"
+RECONNECT_DELAY = int(os.getenv("RECONNECT_DELAY", "10"))
+
 VOICE_IDS = [int(c.strip()) for c in os.getenv("VOICE_CHANNEL_IDS", "").split(",") if c.strip()]
 SELF_MUTE = os.getenv("SELF_MUTE", "true").lower() == "true"
 SELF_DEAF = os.getenv("SELF_DEAF", "false").lower() == "true"
@@ -62,8 +76,10 @@ WS_HEADERS = {
 # ACCOUNT - Raw Gateway
 # ============================================================
 class Account:
-    def __init__(self, token: str, channel_id: int, index: int):
-        self.token = token
+    def __init__(self, email: str, password: str, channel_id: int, index: int):
+        self.email = email
+        self.password = password
+        self.token = None
         self.channel_id = channel_id
         self.index = index
         self.name = f"ACC#{index}"
@@ -76,6 +92,11 @@ class Account:
 
     async def run(self):
         self._keep_alive = True
+
+        # Login bằng email:password để lấy token mới
+        if not await self._login():
+            return
+
         while self._keep_alive:
             try:
                 await self._connect_gateway()
@@ -87,6 +108,42 @@ class Account:
             if self._keep_alive:
                 log.info(f"[{self.name}] Reconnect sau {RECONNECT_DELAY}s...")
                 await asyncio.sleep(RECONNECT_DELAY)
+
+    async def _login(self) -> bool:
+        """Login bằng email:password, lấy token."""
+        log.info(f"[{self.name}] Đang login: {self.email}...")
+
+        payload = {
+            "login": self.email,
+            "password": self.password,
+            "undelete": False,
+            "captcha_key": None,
+            "login_source": None,
+            "gift_code_sku_id": None,
+        }
+
+        headers = {
+            "user-agent": UA,
+            "origin": "https://discord.com",
+            "content-type": "application/json",
+        }
+
+        async with AsyncSession(headers=headers, impersonate="chrome142") as s:
+            resp = await s.post("https://discord.com/api/v9/auth/login", json=payload)
+            if resp.status_code == 200:
+                data = resp.json()
+                self.token = data.get("token")
+                log.info(f"[{self.name}] ✅ Login thành công, lấy token mới")
+                return True
+            elif resp.status_code == 400:
+                log.error(f"[{self.name}] ❌ Sai email/password! (400)")
+                return False
+            elif resp.status_code == 401:
+                log.error(f"[{self.name}] ❌ Sai email/password! (401)")
+                return False
+            else:
+                log.error(f"[{self.name}] ❌ Login thất bại: HTTP {resp.status_code}")
+                return False
 
     async def _get_gateway(self) -> str:
         """Lấy gateway URL từ Discord REST API."""
@@ -343,20 +400,20 @@ class Account:
 # MAIN
 # ============================================================
 async def main():
-    if not TOKENS:
-        log.error("❌ Thiếu DISCORD_TOKENS trong .env!")
+    if not ACCOUNTS:
+        log.error("❌ Thiếu DISCORD_ACCOUNTS (email:password) trong .env!")
         sys.exit(1)
     if not VOICE_IDS:
         log.error("❌ Thiếu VOICE_CHANNEL_IDS trong .env!")
         sys.exit(1)
 
-    log.info(f"🚀 Khởi động {len(TOKENS)} acc | Channels: {VOICE_IDS}")
+    log.info(f"🚀 Khởi động {len(ACCOUNTS)} acc | Channels: {VOICE_IDS}")
     log.info(f"   Mute={SELF_MUTE} Deaf={SELF_DEAF} Reconnect={RECONNECT_DELAY}s")
-    log.info(f"   Phương pháp: websockets + curl_cffi (REST)")
+    log.info(f"   Phương pháp: Login bằng email:password + websockets")
     log.info("=" * 40)
 
-    accounts = [Account(t, VOICE_IDS[i % len(VOICE_IDS)], i + 1)
-                for i, t in enumerate(TOKENS)]
+    accounts = [Account(email, password, VOICE_IDS[i % len(VOICE_IDS)], i + 1)
+                for i, (email, password) in enumerate(ACCOUNTS)]
 
     tasks = [asyncio.create_task(acc.run()) for acc in accounts]
 
